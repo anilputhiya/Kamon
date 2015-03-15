@@ -14,18 +14,16 @@
  * =========================================================================================
  */
 
-package kamon.supervisor
+package kamon.util
 
-import org.aspectj.lang.ProceedingJoinPoint
-import org.aspectj.lang.annotation.{ Around, Aspect, Pointcut }
+import kamon.metric.instrument.Histogram
 
-@Aspect
-class AspectJPresent {
-
-  @Pointcut("execution(* kamon.supervisor.KamonSupervisor.isAspectJPresent())")
-  def isAspectJPresentAtModuleSupervisor(): Unit = {}
-
-  @Around("isAspectJPresentAtModuleSupervisor()")
-  def aroundIsAspectJPresentAtModuleSupervisor(pjp: ProceedingJoinPoint): Boolean = true
-
+object Latency {
+  def measure[A](histogram: Histogram)(thunk: ⇒ A): A = {
+    val start = RelativeNanoTimestamp.now
+    try thunk finally {
+      val latency = NanoInterval.since(start).nanos
+      histogram.record(latency)
+    }
+  }
 }

@@ -21,12 +21,12 @@ import java.util.concurrent.atomic.AtomicLong
 
 import akka.actor._
 import com.typesafe.config.Config
-import kamon.metric.MetricsExtension
+import kamon.metric.Metrics
 import kamon.util._
 
 import scala.util.Try
 
-trait TracerExtension {
+trait Tracer {
   def newContext(name: String): TraceContext
   def newContext(name: String, token: String): TraceContext
   def newContext(name: String, token: String, timestamp: RelativeNanoTimestamp, isOpen: Boolean, isLocal: Boolean): TraceContext
@@ -35,7 +35,29 @@ trait TracerExtension {
   def unsubscribe(subscriber: ActorRef): Unit
 }
 
-private[kamon] class TracerExtensionImpl(metricsExtension: MetricsExtension, config: Config) extends TracerExtension {
+object Tracer {
+  private[kamon] val _traceContextStorage = new ThreadLocal[TraceContext] {
+    override def initialValue(): TraceContext = EmptyTraceContext
+  }
+
+  def currentContext: TraceContext =
+    _traceContextStorage.get()
+
+  def setCurrentContext(context: TraceContext): Unit =
+    _traceContextStorage.set(context)
+
+  def clearCurrentContext: Unit =
+    _traceContextStorage.remove()
+
+  def withContext[T](context: TraceContext)(code: ⇒ T): T = {
+    val oldContext = _traceContextStorage.get()
+    _traceContextStorage.set(context)
+
+    try code finally _traceContextStorage.set(oldContext)
+  }
+}
+
+private[kamon] class TracerImpl(metricsExtension: Metrics, config: Config) extends Tracer {
   private val _settings = TraceSettings(config)
   private val _hostnamePrefix = Try(InetAddress.getLocalHost.getHostName).getOrElse("unknown-localhost")
   private val _tokenCounter = new AtomicLong
@@ -58,7 +80,7 @@ private[kamon] class TracerExtensionImpl(metricsExtension: MetricsExtension, con
   private def createTraceContext(traceName: String, token: String = newToken, startTimestamp: RelativeNanoTimestamp = RelativeNanoTimestamp.now,
     isOpen: Boolean = true, isLocal: Boolean = true): TraceContext = {
 
-    def newMetricsOnlyContext = new MetricsOnlyContext(traceName, token, isOpen, _settings.levelOfDetail, startTimestamp, null, metricsExtension)
+    def newMetricsOnlyContext = new MetricsOnlyContext(traceName, token, isOpen, _settings.levelOfDetail, startTimestamp, null)
 
     if (_settings.levelOfDetail == LevelOfDetail.MetricsOnly || !isLocal)
       newMetricsOnlyContext
@@ -66,7 +88,7 @@ private[kamon] class TracerExtensionImpl(metricsExtension: MetricsExtension, con
       if (!_settings.sampler.shouldTrace)
         newMetricsOnlyContext
       else
-        new TracingContext(traceName, token, true, _settings.levelOfDetail, isLocal, startTimestamp, null, metricsExtension, this, dispatchTracingContext)
+        new TracingContext(traceName, token, true, _settings.levelOfDetail, isLocal, startTimestamp, null, dispatchTracingContext)
     }
   }
 
@@ -100,10 +122,10 @@ private[kamon] class TracerExtensionImpl(metricsExtension: MetricsExtension, con
   }
 }
 
-private[kamon] object TracerExtensionImpl {
+private[kamon] object TracerImpl {
 
-  def apply(metricsExtension: MetricsExtension, config: Config) =
-    new TracerExtensionImpl(metricsExtension, config)
+  def apply(metricsExtension: Metrics, config: Config) =
+    new TracerImpl(metricsExtension, config)
 }
 
 case class TraceInfo(name: String, token: String, timestamp: NanoTimestamp, elapsedTime: NanoInterval, metadata: Map[String, String], segments: List[SegmentInfo])
